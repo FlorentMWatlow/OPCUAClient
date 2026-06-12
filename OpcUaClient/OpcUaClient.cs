@@ -535,7 +535,7 @@ namespace OpcUaClient
             System.IO.Directory.CreateDirectory(configuration.SecurityConfiguration.TrustedIssuerCertificates.StorePath);
             System.IO.Directory.CreateDirectory(configuration.SecurityConfiguration.RejectedCertificateStore.StorePath);
 
-            configuration.CertificateValidator.CertificateValidation += delegate(object sender, CertificateValidationEventArgs e)
+            configuration.CertificateValidator.CertificateValidation += delegate(CertificateValidator sender, CertificateValidationEventArgs e)
             {
                 e.Accept = allowUntrustedCertificates;
             };
