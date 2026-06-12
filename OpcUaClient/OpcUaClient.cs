@@ -249,6 +249,38 @@ namespace OpcUaClient
             }
         }
 
+        public bool TryAddItemByName(string nodeName, out string resolvedNodeId, out string errorMessage)
+        {
+            ThrowIfDisposed();
+            EnsureConnected();
+
+            resolvedNodeId = string.Empty;
+            errorMessage = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(nodeName))
+            {
+                errorMessage = "Node name is required.";
+                return false;
+            }
+
+            var matches = FindMatchingNodesByName(nodeName.Trim());
+            if (matches.Count == 0)
+            {
+                errorMessage = "No OPC UA node found with name '" + nodeName + "'.";
+                return false;
+            }
+
+            if (matches.Count > 1)
+            {
+                errorMessage = "Multiple OPC UA nodes found with name '" + nodeName + "': " + string.Join(", ", matches.Select(x => x.NodeIdText));
+                return false;
+            }
+
+            resolvedNodeId = matches[0].NodeIdText;
+            AddItem(resolvedNodeId);
+            return true;
+        }
+
         public void RemoveItem(string nodeIdText)
         {
             ThrowIfDisposed();
@@ -342,6 +374,55 @@ namespace OpcUaClient
 
             if (StatusCode.IsBad(results[0]))
                 throw new ServiceResultException(results[0], "Write failed for node '" + nodeIdText + "'.");
+        }
+
+        private List<NodeMatch> FindMatchingNodesByName(string nodeName)
+        {
+            var matches = new List<NodeMatch>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            FindMatchingNodesByNameRecursive(ObjectIds.ObjectsFolder, nodeName, matches, visited);
+            return matches;
+        }
+
+        private void FindMatchingNodesByNameRecursive(NodeId parentNodeId, string nodeName, List<NodeMatch> matches, HashSet<string> visited)
+        {
+            var parentKey = parentNodeId.ToString();
+            if (!visited.Add(parentKey))
+                return;
+
+            var children = BrowseChildren(parentKey);
+            foreach (var reference in children)
+            {
+                var childNodeId = ExpandedNodeId.ToNodeId(reference.NodeId, _session.NamespaceUris);
+                if (childNodeId == null)
+                    continue;
+
+                var displayName = reference.DisplayName != null ? reference.DisplayName.Text : string.Empty;
+                var browseName = reference.BrowseName != null ? reference.BrowseName.Name : string.Empty;
+                var childNodeIdText = childNodeId.ToString();
+
+                if (string.Equals(displayName, nodeName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(browseName, nodeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches.Add(new NodeMatch
+                    {
+                        NodeIdText = childNodeIdText,
+                        DisplayName = string.IsNullOrWhiteSpace(displayName) ? browseName : displayName
+                    });
+                }
+
+                if (CanHaveChildren(reference.NodeClass))
+                    FindMatchingNodesByNameRecursive(childNodeId, nodeName, matches, visited);
+            }
+        }
+
+        private static bool CanHaveChildren(NodeClass nodeClass)
+        {
+            return nodeClass == NodeClass.Object
+                || nodeClass == NodeClass.Variable
+                || nodeClass == NodeClass.ObjectType
+                || nodeClass == NodeClass.VariableType
+                || nodeClass == NodeClass.View;
         }
 
         private void MonitoredItem_Notification(MonitoredItem monitoredItem, MonitoredItemNotificationEventArgs e)
@@ -503,6 +584,12 @@ namespace OpcUaClient
 
             Disconnect();
             _disposed = true;
+        }
+
+        private sealed class NodeMatch
+        {
+            public string NodeIdText { get; set; }
+            public string DisplayName { get; set; }
         }
     }
 }

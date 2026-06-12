@@ -112,6 +112,33 @@ namespace OpcUaClientTestApp
             }
         }
 
+        private void btnAddByName_Click(object sender, EventArgs e)
+        {
+            var nodeName = txtNodeName.Text.Trim();
+            if (string.IsNullOrWhiteSpace(nodeName))
+                return;
+
+            try
+            {
+                string resolvedNodeId;
+                string errorMessage;
+
+                if (_client.TryAddItemByName(nodeName, out resolvedNodeId, out errorMessage))
+                {
+                    txtNodeId.Text = resolvedNodeId;
+                    _bs.ResetBindings(false);
+                }
+                else
+                {
+                    MessageBox.Show(errorMessage, "Add by name error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Add by name error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void btnRemove_Click(object sender, EventArgs e)
         {
             if (dataGridView1.CurrentRow == null)
@@ -272,11 +299,13 @@ namespace OpcUaClientTestApp
         {
             treeViewBrowser.Enabled = enabled;
             btnAdd.Enabled = enabled;
+            btnAddByName.Enabled = enabled;
             btnRemove.Enabled = enabled;
             btnRead.Enabled = enabled;
             btnWrite.Enabled = enabled;
             btnRefresh.Enabled = enabled;
             txtNodeId.Enabled = enabled;
+            txtNodeName.Enabled = enabled;
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
