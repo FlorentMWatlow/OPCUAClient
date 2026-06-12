@@ -3,7 +3,7 @@ using OpcUaClient;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace OpcUaClientTestApp
@@ -33,11 +33,13 @@ namespace OpcUaClientTestApp
 
             _client.AttributeUpdated += Client_AttributeUpdated;
             _client.ConnectionStateChanged += Client_ConnectionStateChanged;
+            _client.NodeCacheStateChanged += Client_NodeCacheStateChanged;
 
             treeViewBrowser.BeforeExpand += TreeViewBrowser_BeforeExpand;
             treeViewBrowser.AfterSelect += TreeViewBrowser_AfterSelect;
 
             SetBrowserEnabled(false);
+            UpdateNodeCacheUiState();
         }
 
         private void Client_ConnectionStateChanged(object sender, ConnectionStateChangedEventArgs e)
@@ -50,6 +52,18 @@ namespace OpcUaClientTestApp
 
             lblStatus.Text = e.State.ToString();
             SetBrowserEnabled(e.State == OpcUaConnectionState.Connected);
+            UpdateNodeCacheUiState();
+        }
+
+        private void Client_NodeCacheStateChanged(object sender, EventArgs e)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => Client_NodeCacheStateChanged(sender, e)));
+                return;
+            }
+
+            UpdateNodeCacheUiState();
         }
 
         private void Client_AttributeUpdated(object sender, AttributeUpdatedEventArgs e)
@@ -81,6 +95,7 @@ namespace OpcUaClientTestApp
 
                 lblStatus.Text = _client.ConnectionState.ToString();
                 LoadBrowserRoot();
+                UpdateNodeCacheUiState();
             }
             catch (Exception ex)
             {
@@ -93,6 +108,7 @@ namespace OpcUaClientTestApp
             _client.Disconnect();
             lblStatus.Text = _client.ConnectionState.ToString();
             ClearBrowser();
+            UpdateNodeCacheUiState();
         }
 
         private void btnAdd_Click(object sender, EventArgs e)
@@ -112,18 +128,23 @@ namespace OpcUaClientTestApp
             }
         }
 
-        private void btnAddByName_Click(object sender, EventArgs e)
+        private async void btnAddByName_Click(object sender, EventArgs e)
         {
             var nodeName = txtNodeName.Text.Trim();
             if (string.IsNullOrWhiteSpace(nodeName))
                 return;
 
+            btnAddByName.Enabled = false;
+
             try
             {
-                string resolvedNodeId;
-                string errorMessage;
+                string resolvedNodeId = null;
+                string errorMessage = null;
 
-                if (_client.TryAddItemByName(nodeName, out resolvedNodeId, out errorMessage))
+                var success = await Task.Run(() =>
+                    _client.TryAddItemByName(nodeName, out resolvedNodeId, out errorMessage));
+
+                if (success)
                 {
                     txtNodeId.Text = resolvedNodeId;
                     _bs.ResetBindings(false);
@@ -136,6 +157,10 @@ namespace OpcUaClientTestApp
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, "Add by name error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                UpdateNodeCacheUiState();
             }
         }
 
@@ -247,7 +272,7 @@ namespace OpcUaClientTestApp
             IReadOnlyList<ReferenceDescription> references;
             try
             {
-                references = (IReadOnlyList<ReferenceDescription>)_client.BrowseChildren(nodeId);
+                references = _client.BrowseChildren(nodeId);
             }
             catch (Exception ex)
             {
@@ -299,13 +324,37 @@ namespace OpcUaClientTestApp
         {
             treeViewBrowser.Enabled = enabled;
             btnAdd.Enabled = enabled;
-            btnAddByName.Enabled = enabled;
             btnRemove.Enabled = enabled;
             btnRead.Enabled = enabled;
             btnWrite.Enabled = enabled;
             btnRefresh.Enabled = enabled;
             txtNodeId.Enabled = enabled;
-            txtNodeName.Enabled = enabled;
+        }
+
+        private void UpdateNodeCacheUiState()
+        {
+            if (_client.IsNodeCacheBuilding)
+            {
+                btnAddByName.Enabled = false;
+                txtNodeName.Enabled = false;
+                lblStatus.Text = "Connected - indexing OPC nodes...";
+            }
+            else if (_client.IsNodeCacheReady)
+            {
+                btnAddByName.Enabled = _client.IsConnected;
+                txtNodeName.Enabled = _client.IsConnected;
+                lblStatus.Text = "Connected - node cache ready";
+            }
+            else
+            {
+                btnAddByName.Enabled = false;
+                txtNodeName.Enabled = false;
+
+                if (_client.IsConnected)
+                    lblStatus.Text = "Connected";
+                else
+                    lblStatus.Text = "Disconnected";
+            }
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)

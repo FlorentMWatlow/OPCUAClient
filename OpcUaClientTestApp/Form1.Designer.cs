@@ -159,10 +159,10 @@ namespace OpcUaClientTestApp
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.dataGridView1.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            this.dataGridView1.Location = new System.Drawing.Point(272, 114);
+            this.dataGridView1.Location = new System.Drawing.Point(272, 140);
             this.dataGridView1.Name = "dataGridView1";
             this.dataGridView1.ReadOnly = true;
-            this.dataGridView1.Size = new System.Drawing.Size(844, 387);
+            this.dataGridView1.Size = new System.Drawing.Size(844, 361);
             this.dataGridView1.TabIndex = 12;
             // 
             // lblStatus
@@ -242,15 +242,15 @@ namespace OpcUaClientTestApp
             // 
             // treeViewBrowser
             // 
-            this.treeViewBrowser.Location = new System.Drawing.Point(12, 114);
+            this.treeViewBrowser.Location = new System.Drawing.Point(12, 140);
             this.treeViewBrowser.Name = "treeViewBrowser";
-            this.treeViewBrowser.Size = new System.Drawing.Size(250, 387);
+            this.treeViewBrowser.Size = new System.Drawing.Size(250, 361);
             this.treeViewBrowser.TabIndex = 13;
             // 
             // lblBrowser
             // 
             this.lblBrowser.AutoSize = true;
-            this.lblBrowser.Location = new System.Drawing.Point(12, 98);
+            this.lblBrowser.Location = new System.Drawing.Point(12, 124);
             this.lblBrowser.Name = "lblBrowser";
             this.lblBrowser.Size = new System.Drawing.Size(45, 13);
             this.lblBrowser.TabIndex = 14;
