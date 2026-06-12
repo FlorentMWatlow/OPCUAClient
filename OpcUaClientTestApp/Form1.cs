@@ -272,7 +272,7 @@ namespace OpcUaClientTestApp
             IReadOnlyList<ReferenceDescription> references;
             try
             {
-                references = _client.BrowseChildren(nodeId);
+                references = (IReadOnlyList<ReferenceDescription>)_client.BrowseChildren(nodeId);
             }
             catch (Exception ex)
             {

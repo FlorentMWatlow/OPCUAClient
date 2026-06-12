@@ -8,7 +8,6 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace OpcUaClient
 {
@@ -18,16 +17,11 @@ namespace OpcUaClient
         private readonly Dictionary<string, MonitoredItem> _monitoredItemsByNodeId = new Dictionary<string, MonitoredItem>(StringComparer.OrdinalIgnoreCase);
         private readonly SynchronizationContext _syncContext;
         private readonly object _syncRoot = new object();
-        private readonly object _nodeCacheSyncRoot = new object();
         private Session _session;
         private Subscription _subscription;
         private bool _disposed;
         private readonly string _applicationName;
         private bool _allowUntrustedCertificates;
-        private Dictionary<string, List<NodeMatch>> _nodeCacheByName = new Dictionary<string, List<NodeMatch>>(StringComparer.OrdinalIgnoreCase);
-        private bool _isNodeCacheReady;
-        private bool _isNodeCacheBuilding;
-        private CancellationTokenSource _nodeCacheCancellationTokenSource;
 
         public BindingList<aaAttribute> Attributes
         {
@@ -39,12 +33,9 @@ namespace OpcUaClient
         public bool IsConnected { get { return _session != null && _session.Connected; } }
         public string LastError { get; private set; }
         public bool AllowUntrustedCertificates { get { return _allowUntrustedCertificates; } }
-        public bool IsNodeCacheReady { get { lock (_nodeCacheSyncRoot) return _isNodeCacheReady; } }
-        public bool IsNodeCacheBuilding { get { lock (_nodeCacheSyncRoot) return _isNodeCacheBuilding; } }
 
         public event EventHandler<AttributeUpdatedEventArgs> AttributeUpdated;
         public event EventHandler<ConnectionStateChangedEventArgs> ConnectionStateChanged;
-        public event EventHandler NodeCacheStateChanged;
 
         public OpcUaClient(string applicationName)
         {
@@ -116,7 +107,6 @@ namespace OpcUaClient
 
                 SetConnectionState(OpcUaConnectionState.Connected);
                 LastError = string.Empty;
-                StartNodeCacheBuild();
             }
             catch (Exception ex)
             {
@@ -128,8 +118,6 @@ namespace OpcUaClient
 
         public void Disconnect()
         {
-            CancelAndClearNodeCache();
-
             Session sessionToDispose = null;
             Subscription subscriptionToDispose = null;
             List<MonitoredItem> monitoredItems;
@@ -275,23 +263,8 @@ namespace OpcUaClient
                 return false;
             }
 
-            Dictionary<string, List<NodeMatch>> cacheSnapshot;
-            bool isReady;
-
-            lock (_nodeCacheSyncRoot)
-            {
-                cacheSnapshot = _nodeCacheByName;
-                isReady = _isNodeCacheReady;
-            }
-
-            if (!isReady)
-            {
-                errorMessage = "Node cache is not ready yet. Please wait until indexing is complete.";
-                return false;
-            }
-
-            List<NodeMatch> matches;
-            if (!cacheSnapshot.TryGetValue(nodeName.Trim(), out matches) || matches.Count == 0)
+            var matches = FindMatchingNodesByName(nodeName.Trim());
+            if (matches.Count == 0)
             {
                 errorMessage = "No OPC UA node found with name '" + nodeName + "'.";
                 return false;
@@ -299,74 +272,13 @@ namespace OpcUaClient
 
             if (matches.Count > 1)
             {
-                errorMessage = "Multiple OPC UA nodes found with name '" + nodeName + "': "
-                    + string.Join(", ", matches.Select(x => x.NodeIdText));
+                errorMessage = "Multiple OPC UA nodes found with name '" + nodeName + "': " + string.Join(", ", matches.Select(x => x.NodeIdText));
                 return false;
             }
 
             resolvedNodeId = matches[0].NodeIdText;
             AddItem(resolvedNodeId);
             return true;
-        }
-
-        public void StartNodeCacheBuild()
-        {
-            ThrowIfDisposed();
-            EnsureConnected();
-
-            lock (_nodeCacheSyncRoot)
-            {
-                if (_isNodeCacheBuilding)
-                    return;
-
-                if (_nodeCacheCancellationTokenSource != null)
-                {
-                    try { _nodeCacheCancellationTokenSource.Dispose(); }
-                    catch { }
-                }
-
-                _nodeCacheCancellationTokenSource = new CancellationTokenSource();
-                _isNodeCacheBuilding = true;
-                _isNodeCacheReady = false;
-                _nodeCacheByName.Clear();
-            }
-
-            OnNodeCacheStateChanged();
-
-            var token = _nodeCacheCancellationTokenSource.Token;
-
-            Task.Run(() =>
-            {
-                try
-                {
-                    var localCache = new Dictionary<string, List<NodeMatch>>(StringComparer.OrdinalIgnoreCase);
-                    var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                    BuildNodeCacheRecursive(ObjectIds.ObjectsFolder, localCache, visited, token);
-
-                    lock (_nodeCacheSyncRoot)
-                    {
-                        if (token.IsCancellationRequested)
-                            return;
-
-                        _nodeCacheByName = localCache;
-                        _isNodeCacheReady = true;
-                        _isNodeCacheBuilding = false;
-                    }
-                }
-                catch
-                {
-                    lock (_nodeCacheSyncRoot)
-                    {
-                        _isNodeCacheReady = false;
-                        _isNodeCacheBuilding = false;
-                    }
-                }
-                finally
-                {
-                    OnNodeCacheStateChanged();
-                }
-            }, token);
         }
 
         public void RemoveItem(string nodeIdText)
@@ -464,77 +376,43 @@ namespace OpcUaClient
                 throw new ServiceResultException(results[0], "Write failed for node '" + nodeIdText + "'.");
         }
 
-        private void BuildNodeCacheRecursive(
-            NodeId parentNodeId,
-            Dictionary<string, List<NodeMatch>> localCache,
-            HashSet<string> visited,
-            CancellationToken token)
+        private List<NodeMatch> FindMatchingNodesByName(string nodeName)
         {
-            token.ThrowIfCancellationRequested();
+            var matches = new List<NodeMatch>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            FindMatchingNodesByNameRecursive(ObjectIds.ObjectsFolder, nodeName, matches, visited);
+            return matches;
+        }
 
+        private void FindMatchingNodesByNameRecursive(NodeId parentNodeId, string nodeName, List<NodeMatch> matches, HashSet<string> visited)
+        {
             var parentKey = parentNodeId.ToString();
             if (!visited.Add(parentKey))
                 return;
 
             var children = BrowseChildren(parentKey);
-
             foreach (var reference in children)
             {
-                token.ThrowIfCancellationRequested();
-
                 var childNodeId = ExpandedNodeId.ToNodeId(reference.NodeId, _session.NamespaceUris);
                 if (childNodeId == null)
                     continue;
 
-                var childNodeIdText = childNodeId.ToString();
                 var displayName = reference.DisplayName != null ? reference.DisplayName.Text : string.Empty;
                 var browseName = reference.BrowseName != null ? reference.BrowseName.Name : string.Empty;
+                var childNodeIdText = childNodeId.ToString();
 
-                AddNodeToCache(localCache, displayName, browseName, childNodeIdText);
+                if (string.Equals(displayName, nodeName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(browseName, nodeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches.Add(new NodeMatch
+                    {
+                        NodeIdText = childNodeIdText,
+                        DisplayName = string.IsNullOrWhiteSpace(displayName) ? browseName : displayName
+                    });
+                }
 
                 if (CanHaveChildren(reference.NodeClass))
-                    BuildNodeCacheRecursive(childNodeId, localCache, visited, token);
-            }
-        }
-
-        private static void AddNodeToCache(
-            Dictionary<string, List<NodeMatch>> cache,
-            string displayName,
-            string browseName,
-            string nodeIdText)
-        {
-            if (!string.IsNullOrWhiteSpace(displayName))
-                AddNodeCacheEntry(cache, displayName, nodeIdText, displayName, browseName);
-
-            if (!string.IsNullOrWhiteSpace(browseName)
-                && !string.Equals(displayName, browseName, StringComparison.OrdinalIgnoreCase))
-            {
-                AddNodeCacheEntry(cache, browseName, nodeIdText, displayName, browseName);
-            }
-        }
-
-        private static void AddNodeCacheEntry(
-            Dictionary<string, List<NodeMatch>> cache,
-            string key,
-            string nodeIdText,
-            string displayName,
-            string browseName)
-        {
-            List<NodeMatch> entries;
-            if (!cache.TryGetValue(key, out entries))
-            {
-                entries = new List<NodeMatch>();
-                cache[key] = entries;
-            }
-
-            if (!entries.Any(x => string.Equals(x.NodeIdText, nodeIdText, StringComparison.OrdinalIgnoreCase)))
-            {
-                entries.Add(new NodeMatch
-                {
-                    NodeIdText = nodeIdText,
-                    DisplayName = displayName,
-                    BrowseName = browseName
-                });
+                    FindMatchingNodesByNameRecursive(childNodeId, nodeName, matches, visited);
             }
         }
 
@@ -545,30 +423,6 @@ namespace OpcUaClient
                 || nodeClass == NodeClass.ObjectType
                 || nodeClass == NodeClass.VariableType
                 || nodeClass == NodeClass.View;
-        }
-
-        private void CancelAndClearNodeCache()
-        {
-            CancellationTokenSource cts = null;
-
-            lock (_nodeCacheSyncRoot)
-            {
-                cts = _nodeCacheCancellationTokenSource;
-                _nodeCacheCancellationTokenSource = null;
-                _isNodeCacheBuilding = false;
-                _isNodeCacheReady = false;
-                _nodeCacheByName.Clear();
-            }
-
-            if (cts != null)
-            {
-                try { cts.Cancel(); }
-                catch { }
-                try { cts.Dispose(); }
-                catch { }
-            }
-
-            OnNodeCacheStateChanged();
         }
 
         private void MonitoredItem_Notification(MonitoredItem monitoredItem, MonitoredItemNotificationEventArgs e)
@@ -612,18 +466,6 @@ namespace OpcUaClient
             var handler = AttributeUpdated;
             if (handler != null)
                 handler(this, new AttributeUpdatedEventArgs(attribute));
-        }
-
-        private void OnNodeCacheStateChanged()
-        {
-            var handler = NodeCacheStateChanged;
-            if (handler == null)
-                return;
-
-            if (_syncContext != null)
-                _syncContext.Post(delegate { handler(this, EventArgs.Empty); }, null);
-            else
-                handler(this, EventArgs.Empty);
         }
 
         private static string FormatTimestamp(DateTime dt)
@@ -693,7 +535,7 @@ namespace OpcUaClient
             System.IO.Directory.CreateDirectory(configuration.SecurityConfiguration.TrustedIssuerCertificates.StorePath);
             System.IO.Directory.CreateDirectory(configuration.SecurityConfiguration.RejectedCertificateStore.StorePath);
 
-            configuration.CertificateValidator.CertificateValidation += delegate(object sender, CertificateValidationEventArgs e)
+            configuration.CertificateValidator.CertificateValidation += delegate(CertificateValidator sender, CertificateValidationEventArgs e)
             {
                 e.Accept = allowUntrustedCertificates;
             };
@@ -748,7 +590,6 @@ namespace OpcUaClient
         {
             public string NodeIdText { get; set; }
             public string DisplayName { get; set; }
-            public string BrowseName { get; set; }
         }
     }
 }
