@@ -5,9 +5,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows.Forms;
-using Opc.Ua;
-using Opc.Ua.Client;
-using Opc.Ua.Types;
 
 namespace OpcUaClientTestApp
 {
@@ -32,6 +29,7 @@ namespace OpcUaClientTestApp
 
             cboSecurity.SelectedIndex = 0;
             txtEndpoint.Text = "opc.tcp://DESMASTERDEV:48031";
+            chkAllowUntrustedCertificates.Checked = false;
 
             _client.AttributeUpdated += Client_AttributeUpdated;
             _client.ConnectionStateChanged += Client_ConnectionStateChanged;
@@ -78,7 +76,8 @@ namespace OpcUaClientTestApp
                     txtEndpoint.Text.Trim(),
                     txtUserName.Text.Trim(),
                     txtPassword.Text,
-                    cboSecurity.SelectedIndex == 1);
+                    cboSecurity.SelectedIndex == 1,
+                    chkAllowUntrustedCertificates.Checked);
 
                 lblStatus.Text = _client.ConnectionState.ToString();
                 LoadBrowserRoot();

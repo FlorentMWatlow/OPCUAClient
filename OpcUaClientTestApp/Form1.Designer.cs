@@ -38,6 +38,7 @@ namespace OpcUaClientTestApp
             this.lblSecurity = new System.Windows.Forms.Label();
             this.treeViewBrowser = new System.Windows.Forms.TreeView();
             this.lblBrowser = new System.Windows.Forms.Label();
+            this.chkAllowUntrustedCertificates = new System.Windows.Forms.CheckBox();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -252,11 +253,22 @@ namespace OpcUaClientTestApp
             this.lblBrowser.TabIndex = 14;
             this.lblBrowser.Text = "Browser";
             // 
+            // chkAllowUntrustedCertificates
+            // 
+            this.chkAllowUntrustedCertificates.AutoSize = true;
+            this.chkAllowUntrustedCertificates.Location = new System.Drawing.Point(580, 40);
+            this.chkAllowUntrustedCertificates.Name = "chkAllowUntrustedCertificates";
+            this.chkAllowUntrustedCertificates.Size = new System.Drawing.Size(159, 17);
+            this.chkAllowUntrustedCertificates.TabIndex = 34;
+            this.chkAllowUntrustedCertificates.Text = "Allow untrusted certificates";
+            this.chkAllowUntrustedCertificates.UseVisualStyleBackColor = true;
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(1128, 536);
+            this.Controls.Add(this.chkAllowUntrustedCertificates);
             this.Controls.Add(this.lblStatus);
             this.Controls.Add(this.dataGridView1);
             this.Controls.Add(this.treeViewBrowser);
@@ -312,5 +324,6 @@ namespace OpcUaClientTestApp
         private System.Windows.Forms.Label lblSecurity;
         private System.Windows.Forms.TreeView treeViewBrowser;
         private System.Windows.Forms.Label lblBrowser;
+        private System.Windows.Forms.CheckBox chkAllowUntrustedCertificates;
     }
 }

@@ -16,10 +16,12 @@ namespace OpcUaClient
         private readonly BindingList<aaAttribute> _attributes = new BindingList<aaAttribute>();
         private readonly Dictionary<string, MonitoredItem> _monitoredItemsByNodeId = new Dictionary<string, MonitoredItem>(StringComparer.OrdinalIgnoreCase);
         private readonly SynchronizationContext _syncContext;
+        private readonly object _syncRoot = new object();
         private Session _session;
         private Subscription _subscription;
         private bool _disposed;
         private readonly string _applicationName;
+        private bool _allowUntrustedCertificates;
 
         public BindingList<aaAttribute> Attributes
         {
@@ -27,9 +29,10 @@ namespace OpcUaClient
         }
 
         public OpcUaConnectionState ConnectionState { get; private set; }
-        public int AttributeCount { get { return _attributes.Count; } }
+        public int AttributeCount { get { lock (_syncRoot) return _attributes.Count; } }
         public bool IsConnected { get { return _session != null && _session.Connected; } }
         public string LastError { get; private set; }
+        public bool AllowUntrustedCertificates { get { return _allowUntrustedCertificates; } }
 
         public event EventHandler<AttributeUpdatedEventArgs> AttributeUpdated;
         public event EventHandler<ConnectionStateChangedEventArgs> ConnectionStateChanged;
@@ -48,19 +51,24 @@ namespace OpcUaClient
 
         public void Connect(string endpointUrl, string userName, string password, bool useSecurity)
         {
+            Connect(endpointUrl, userName, password, useSecurity, false);
+        }
+
+        public void Connect(string endpointUrl, string userName, string password, bool useSecurity, bool allowUntrustedCertificates)
+        {
             ThrowIfDisposed();
 
             if (string.IsNullOrWhiteSpace(endpointUrl))
-                throw new ArgumentException("Endpoint URL is required.", "endpointUrl");
+                throw new ArgumentException("Endpoint URL is required.", nameof(endpointUrl));
 
             Disconnect();
             SetConnectionState(OpcUaConnectionState.Connecting);
 
             try
             {
-                var configuration = CreateConfiguration(_applicationName);
+                _allowUntrustedCertificates = allowUntrustedCertificates;
+                var configuration = CreateConfiguration(_applicationName, allowUntrustedCertificates);
 
-                // Standard/basic endpoint selection for OPC UA .NET Standard 1.5.x
                 var selectedEndpoint = CoreClientUtils.SelectEndpoint(configuration, endpointUrl, useSecurity, 15000);
                 var endpointConfiguration = EndpointConfiguration.Create(configuration);
                 var configuredEndpoint = new ConfiguredEndpoint(null, selectedEndpoint, endpointConfiguration);
@@ -72,7 +80,6 @@ namespace OpcUaClient
                 }
                 else
                 {
-                    // Some SDK builds expose the password token as byte[]
                     identity = new UserIdentity(userName, Encoding.UTF8.GetBytes(password ?? string.Empty));
                 }
 
@@ -111,43 +118,62 @@ namespace OpcUaClient
 
         public void Disconnect()
         {
-            ThrowIfDisposed();
+            Session sessionToDispose = null;
+            Subscription subscriptionToDispose = null;
+            List<MonitoredItem> monitoredItems;
+
+            lock (_syncRoot)
+            {
+                monitoredItems = _monitoredItemsByNodeId.Values.ToList();
+                subscriptionToDispose = _subscription;
+                sessionToDispose = _session;
+
+                foreach (var item in monitoredItems)
+                    item.Notification -= MonitoredItem_Notification;
+
+                _monitoredItemsByNodeId.Clear();
+                _subscription = null;
+                _session = null;
+                _attributes.Clear();
+            }
 
             try
             {
-                if (_subscription != null && _session != null)
+                if (subscriptionToDispose != null)
                 {
-                    foreach (var item in _monitoredItemsByNodeId.Values.ToList())
-                        _subscription.RemoveItem(item);
+                    foreach (var item in monitoredItems)
+                        subscriptionToDispose.RemoveItem(item);
 
-                    _subscription.Delete(true);
-                    _session.RemoveSubscription(_subscription);
+                    subscriptionToDispose.ApplyChanges();
+                    subscriptionToDispose.Delete(true);
                 }
             }
             catch
             {
-                // Ignore cleanup errors.
+            }
+
+            try
+            {
+                if (sessionToDispose != null && subscriptionToDispose != null)
+                    sessionToDispose.RemoveSubscription(subscriptionToDispose);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (sessionToDispose != null)
+                {
+                    sessionToDispose.Close();
+                    sessionToDispose.Dispose();
+                }
+            }
+            catch
+            {
             }
             finally
             {
-                _monitoredItemsByNodeId.Clear();
-                _subscription = null;
-                _attributes.Clear();
-
-                if (_session != null)
-                {
-                    try
-                    {
-                        _session.Close();
-                        _session.Dispose();
-                    }
-                    catch
-                    {
-                        // Ignore cleanup errors.
-                    }
-                }
-
-                _session = null;
                 SetConnectionState(OpcUaConnectionState.Disconnected);
             }
         }
@@ -170,7 +196,6 @@ namespace OpcUaClient
                 IncludeSubtypes = true,
                 NodeClassMask = (int)NodeClass.Object | (int)NodeClass.Variable,
                 ResultMask = (uint)BrowseResultMask.All
-                //IgnoreLocalReferences = true
             };
 
             return browser.Browse(startNodeId).Cast<ReferenceDescription>().ToList();
@@ -184,8 +209,11 @@ namespace OpcUaClient
             if (string.IsNullOrWhiteSpace(nodeIdText))
                 return;
 
-            if (_attributes.Any(x => string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase)))
-                return;
+            lock (_syncRoot)
+            {
+                if (_attributes.Any(x => string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase)))
+                    return;
+            }
 
             if (_subscription == null)
                 throw new InvalidOperationException("No active subscription.");
@@ -193,7 +221,7 @@ namespace OpcUaClient
             var nodeId = NodeId.Parse(nodeIdText);
             var attribute = new aaAttribute
             {
-                ItemHandle = _attributes.Count + 1,
+                ItemHandle = Environment.TickCount,
                 TagName = nodeIdText,
                 NodeId = nodeIdText
             };
@@ -211,11 +239,14 @@ namespace OpcUaClient
 
             monitoredItem.Notification += MonitoredItem_Notification;
 
-            _subscription.AddItem(monitoredItem);
-            _subscription.ApplyChanges();
+            lock (_syncRoot)
+            {
+                _subscription.AddItem(monitoredItem);
+                _subscription.ApplyChanges();
 
-            _monitoredItemsByNodeId[nodeIdText] = monitoredItem;
-            _attributes.Add(attribute);
+                _monitoredItemsByNodeId[nodeIdText] = monitoredItem;
+                _attributes.Add(attribute);
+            }
         }
 
         public void RemoveItem(string nodeIdText)
@@ -226,22 +257,29 @@ namespace OpcUaClient
             if (string.IsNullOrWhiteSpace(nodeIdText))
                 return;
 
-            var attribute = _attributes.FirstOrDefault(x =>
-                string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(x.TagName, nodeIdText, StringComparison.OrdinalIgnoreCase));
+            aaAttribute attribute;
+            MonitoredItem monitoredItem = null;
 
-            if (attribute == null)
-                return;
-
-            if (_subscription != null && _monitoredItemsByNodeId.ContainsKey(attribute.NodeId))
+            lock (_syncRoot)
             {
-                var monitoredItem = _monitoredItemsByNodeId[attribute.NodeId];
-                _subscription.RemoveItem(monitoredItem);
-                _subscription.ApplyChanges();
-                _monitoredItemsByNodeId.Remove(attribute.NodeId);
-            }
+                attribute = _attributes.FirstOrDefault(x =>
+                    string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(x.TagName, nodeIdText, StringComparison.OrdinalIgnoreCase));
 
-            _attributes.Remove(attribute);
+                if (attribute == null)
+                    return;
+
+                if (_subscription != null && _monitoredItemsByNodeId.ContainsKey(attribute.NodeId))
+                {
+                    monitoredItem = _monitoredItemsByNodeId[attribute.NodeId];
+                    monitoredItem.Notification -= MonitoredItem_Notification;
+                    _subscription.RemoveItem(monitoredItem);
+                    _subscription.ApplyChanges();
+                    _monitoredItemsByNodeId.Remove(attribute.NodeId);
+                }
+
+                _attributes.Remove(attribute);
+            }
         }
 
         public aaAttribute ReadItem(string nodeIdText)
@@ -250,11 +288,18 @@ namespace OpcUaClient
             EnsureConnected();
 
             if (string.IsNullOrWhiteSpace(nodeIdText))
-                throw new ArgumentException("NodeId is required.", "nodeIdText");
+                throw new ArgumentException("NodeId is required.", nameof(nodeIdText));
 
             var dataValue = _session.ReadValue(NodeId.Parse(nodeIdText));
-            var attribute = _attributes.FirstOrDefault(x =>
-                string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase));
+            if (StatusCode.IsBad(dataValue.StatusCode))
+                throw new ServiceResultException(dataValue.StatusCode, "Read failed for node '" + nodeIdText + "'.");
+
+            aaAttribute attribute;
+            lock (_syncRoot)
+            {
+                attribute = _attributes.FirstOrDefault(x =>
+                    string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase));
+            }
 
             if (attribute == null)
             {
@@ -276,7 +321,7 @@ namespace OpcUaClient
             EnsureConnected();
 
             if (string.IsNullOrWhiteSpace(nodeIdText))
-                throw new ArgumentException("NodeId is required.", "nodeIdText");
+                throw new ArgumentException("NodeId is required.", nameof(nodeIdText));
 
             var writeValues = new WriteValueCollection
             {
@@ -291,12 +336,24 @@ namespace OpcUaClient
             StatusCodeCollection results;
             DiagnosticInfoCollection diagnosticInfos;
             _session.Write(null, writeValues, out results, out diagnosticInfos);
+
+            if (results == null || results.Count == 0)
+                throw new ServiceResultException(StatusCodes.BadUnexpectedError, "Write did not return a status code.");
+
+            if (StatusCode.IsBad(results[0]))
+                throw new ServiceResultException(results[0], "Write failed for node '" + nodeIdText + "'.");
         }
 
         private void MonitoredItem_Notification(MonitoredItem monitoredItem, MonitoredItemNotificationEventArgs e)
         {
             var nodeIdText = monitoredItem.StartNodeId != null ? monitoredItem.StartNodeId.ToString() : monitoredItem.DisplayName;
-            var attribute = _attributes.FirstOrDefault(x => string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase));
+            aaAttribute attribute;
+
+            lock (_syncRoot)
+            {
+                attribute = _attributes.FirstOrDefault(x => string.Equals(x.NodeId, nodeIdText, StringComparison.OrdinalIgnoreCase));
+            }
+
             if (attribute == null)
                 return;
 
@@ -338,7 +395,7 @@ namespace OpcUaClient
             return dt.ToString("o", CultureInfo.InvariantCulture);
         }
 
-        private static ApplicationConfiguration CreateConfiguration(string applicationName)
+        private static ApplicationConfiguration CreateConfiguration(string applicationName, bool allowUntrustedCertificates)
         {
             var basePath = AppDomain.CurrentDomain.BaseDirectory;
 
@@ -350,9 +407,9 @@ namespace OpcUaClient
 
                 SecurityConfiguration = new SecurityConfiguration
                 {
-                    AutoAcceptUntrustedCertificates = true,
-                    RejectSHA1SignedCertificates = false,
-                    MinimumCertificateKeySize = 1024,
+                    AutoAcceptUntrustedCertificates = allowUntrustedCertificates,
+                    RejectSHA1SignedCertificates = true,
+                    MinimumCertificateKeySize = 2048,
 
                     ApplicationCertificate = new CertificateIdentifier
                     {
@@ -397,18 +454,13 @@ namespace OpcUaClient
             System.IO.Directory.CreateDirectory(configuration.SecurityConfiguration.TrustedIssuerCertificates.StorePath);
             System.IO.Directory.CreateDirectory(configuration.SecurityConfiguration.RejectedCertificateStore.StorePath);
 
-            configuration.CertificateValidator.CertificateValidation +=
-                CertificateValidator_CertificateValidation;
+            configuration.CertificateValidator.CertificateValidation += delegate(object sender, CertificateValidationEventArgs e)
+            {
+                e.Accept = allowUntrustedCertificates;
+            };
 
             configuration.Validate(ApplicationType.Client).GetAwaiter().GetResult();
             return configuration;
-        }
-
-        private static void CertificateValidator_CertificateValidation(
-            CertificateValidator sender,
-            CertificateValidationEventArgs e)
-        {
-            e.Accept = true;
         }
 
         private void SetConnectionState(OpcUaConnectionState state)
