@@ -39,6 +39,9 @@ namespace OpcUaClientTestApp
             this.treeViewBrowser = new System.Windows.Forms.TreeView();
             this.lblBrowser = new System.Windows.Forms.Label();
             this.chkAllowUntrustedCertificates = new System.Windows.Forms.CheckBox();
+            this.txtNodeName = new System.Windows.Forms.TextBox();
+            this.lblNodeName = new System.Windows.Forms.Label();
+            this.btnAddByName = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -263,11 +266,40 @@ namespace OpcUaClientTestApp
             this.chkAllowUntrustedCertificates.Text = "Allow untrusted certificates";
             this.chkAllowUntrustedCertificates.UseVisualStyleBackColor = true;
             // 
+            // txtNodeName
+            // 
+            this.txtNodeName.Location = new System.Drawing.Point(78, 98);
+            this.txtNodeName.Name = "txtNodeName";
+            this.txtNodeName.Size = new System.Drawing.Size(320, 20);
+            this.txtNodeName.TabIndex = 35;
+            // 
+            // lblNodeName
+            // 
+            this.lblNodeName.AutoSize = true;
+            this.lblNodeName.Location = new System.Drawing.Point(12, 101);
+            this.lblNodeName.Name = "lblNodeName";
+            this.lblNodeName.Size = new System.Drawing.Size(61, 13);
+            this.lblNodeName.TabIndex = 36;
+            this.lblNodeName.Text = "Node name";
+            // 
+            // btnAddByName
+            // 
+            this.btnAddByName.Location = new System.Drawing.Point(404, 96);
+            this.btnAddByName.Name = "btnAddByName";
+            this.btnAddByName.Size = new System.Drawing.Size(90, 23);
+            this.btnAddByName.TabIndex = 37;
+            this.btnAddByName.Text = "Add by name";
+            this.btnAddByName.UseVisualStyleBackColor = true;
+            this.btnAddByName.Click += new System.EventHandler(this.btnAddByName_Click);
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(1128, 536);
+            this.Controls.Add(this.btnAddByName);
+            this.Controls.Add(this.lblNodeName);
+            this.Controls.Add(this.txtNodeName);
             this.Controls.Add(this.chkAllowUntrustedCertificates);
             this.Controls.Add(this.lblStatus);
             this.Controls.Add(this.dataGridView1);
@@ -325,5 +357,8 @@ namespace OpcUaClientTestApp
         private System.Windows.Forms.TreeView treeViewBrowser;
         private System.Windows.Forms.Label lblBrowser;
         private System.Windows.Forms.CheckBox chkAllowUntrustedCertificates;
+        private System.Windows.Forms.TextBox txtNodeName;
+        private System.Windows.Forms.Label lblNodeName;
+        private System.Windows.Forms.Button btnAddByName;
     }
 }
